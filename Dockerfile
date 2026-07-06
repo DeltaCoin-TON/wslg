@@ -1,27 +1,36 @@
 # Base image for both the builder and the runtime stages. Override at build
 # time with --build-arg MARINER_IMAGE=... to track a different Azure Linux
 # base (e.g. test a new image revision before promoting it).
-ARG MARINER_IMAGE=mcr.microsoft.com/azurelinux/base/core:3.0
+ARG MARINER_IMAGE=mcr.microsoft.com/azurelinux-beta/base/core:4.0
 
 # Create a builder image with the compilers, etc. needed
 FROM ${MARINER_IMAGE} AS build-env
 
+# Enable the SDK repo so build-only packages can be resolved.
+RUN printf '[azurelinux-sdk]\n\
+name=Azure Linux $releasever - $basearch - SDK\n\
+baseurl=https://packages.microsoft.com/azurelinux/$releasever/beta/sdk/$basearch\n\
+enabled=1\n\
+gpgcheck=1\n\
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-azurelinux-$releasever-$basearch\n\
+skip_if_unavailable=False\n' > /etc/yum.repos.d/azurelinux-sdk.repo
+
 # Install all the required packages for building. This list is probably
 # longer than necessary.
 RUN echo "== Install Git/CA certificates ==" && \
-    tdnf install -y \
+    dnf install -y \
         git \
         ca-certificates
 
+# build-essentia
 RUN echo "== Install Core dependencies ==" && \
-    tdnf install -y \
+    dnf install -y \
         alsa-lib \
         alsa-lib-devel  \
         autoconf  \
         automake  \
         binutils  \
         bison  \
-        build-essential  \
         cairo \
         cairo-devel \
         clang  \
@@ -40,7 +49,6 @@ RUN echo "== Install Core dependencies ==" && \
         gcc  \
         gettext  \
         glibc-devel  \
-        glib-schemas \
         gobject-introspection  \
         gobject-introspection-devel  \
         harfbuzz  \
@@ -55,14 +63,14 @@ RUN echo "== Install Core dependencies ==" && \
         libgudev-devel  \
         libjpeg-turbo  \
         libjpeg-turbo-devel  \
-        libltdl  \
-        libltdl-devel  \
+        libtool-ltdl  \
+        libtool-ltdl-devel  \
         libpng-devel  \
         librsvg2-devel \
         libtiff  \
         libtiff-devel  \
-        libusb  \
-        libusb-devel  \
+        libusb1  \
+        libusb1-devel  \
         libwebp  \
         libwebp-devel  \
         libxml2 \
@@ -71,7 +79,6 @@ RUN echo "== Install Core dependencies ==" && \
         meson  \
         newt  \
         nss  \
-        nss-libs  \
         openldap  \
         openssl-devel  \
         pam-devel  \
@@ -90,11 +97,10 @@ RUN echo "== Install Core dependencies ==" && \
         unzip  \
         vala  \
         vala-devel  \
-        vala-tools  \
-        zlib-devel
+        zlib-ng-compat-devel
 
 RUN echo "== Install UI dependencies ==" && \
-    tdnf    install -y \
+     dnf    install -y \
             libdrm-devel \
             libepoxy-devel \
             libevdev \
@@ -352,12 +358,12 @@ RUN if [ -z "$SYSTEMDISTRO_DEBUG_BUILD" ] ; then \
 FROM ${MARINER_IMAGE} AS runtime
 
 RUN echo "== Install Core/UI Runtime Dependencies ==" && \
-    tdnf    install -y \
+    dnf    install -y --setopt=install_weak_deps=False \
             busybox \
             ca-certificates \
             cairo \
             chrony \
-            containerd2 \
+            containerd \
             containernetworking-plugins \
             runc \
             dbus \
@@ -366,14 +372,14 @@ RUN echo "== Install Core/UI Runtime Dependencies ==" && \
             docker-buildx \
             docker-cli \
             e2fsprogs \
-            freefont \
+            liberation-fonts \
             gzip \
             icu \
             iptables \
             kmod \
             libinput \
             libjpeg-turbo \
-            libltdl \
+            libtool-ltdl \
             libpng \
             librsvg2 \
             libsndfile \
@@ -391,13 +397,17 @@ RUN echo "== Install Core/UI Runtime Dependencies ==" && \
             procps-ng \
             rpm \
             sed \
+            shadow-utils \
             systemd-libs \
             tar \
             tzdata \
             util-linux \
-            xcursor-themes \
+            adwaita-cursor-theme \
             xorg-x11-server-Xwayland \
-            xorg-x11-server-utils
+            xrdb \
+            setxkbmap \
+            xrandr \
+            xset
 
 # Install busybox utilities
 RUN /sbin/busybox --install -s
@@ -407,26 +417,27 @@ ARG SYSTEMDISTRO_DEBUG_BUILD
 RUN if [ -z "$SYSTEMDISTRO_DEBUG_BUILD" ] ; then \
         echo "== Removing unnecessary packages ==" && \
         # Remove build tools and packages not needed at runtime \
-        rpm -e --nodeps \
+        for p in \
             cracklib-dicts \
-            gcc \
-            gcc-c++ \
             libpkgconf \
-            llvm \
-            perl \
             pkgconf \
             pkgconf-m4 \
             pkgconf-pkg-config \
             python3 \
-            python3-libs && \
+            python3-libs \
+            llvm-libs \
+            mesa-dri-drivers \
+            container-selinux \
+            selinux-policy-targeted \
+            selinux-policy ; do rpm -q "$p" >/dev/null 2>&1 && echo "$p" ; done | xargs -r rpm -e --nodeps && \
         # Remove all perl subpackages \
-        rpm -e --nodeps $(rpm -qa | grep -- '^perl-') && \
+        rpm -qa | grep -- '^perl-' | xargs -r rpm -e --nodeps && \
         # Remove all -devel packages \
-        rpm -e --nodeps $(rpm -qa | grep -- '-devel') && \
+        rpm -qa | grep -- '-devel' | xargs -r rpm -e --nodeps && \
         # Remove systemd components (except systemd-libs which is needed by weston) \
-        rpm -e --nodeps $(rpm -qa | grep -- '^systemd-' | grep -v systemd-libs) && \
+        rpm -qa | grep -- '^systemd-' | grep -v systemd-libs | xargs -r rpm -e --nodeps && \
         # Remove orphaned packages \
-        tdnf autoremove -y && \
+        dnf autoremove -y && \
         echo "== Removing unnecessary files ==" && \
         # Remove docs, man pages, locales, gtk-doc \
         rm -rf /usr/share/man /usr/share/info /usr/share/locale /usr/share/gtk-doc && \
@@ -439,7 +450,7 @@ RUN if [ -z "$SYSTEMDISTRO_DEBUG_BUILD" ] ; then \
         rm -rf /tmp/* /var/tmp/* /var/log/* /var/cache/* /usr/lib/systemd/catalog/*; \
     else \
         echo "== Install development aid packages ==" && \
-        tdnf install -y \
+        dnf install -y \
              gdb \
              azurelinux-repos-debug \
              nano \
@@ -448,8 +459,8 @@ RUN if [ -z "$SYSTEMDISTRO_DEBUG_BUILD" ] ; then \
              xorg-x11-server-debuginfo; \
     fi
 
-# Clear the tdnf cache to make the image smaller
-RUN tdnf clean all
+# Clear the dnf cache to make the image smaller
+RUN dnf clean all
 
 # Create wslg user.
 RUN useradd -u 1000 --create-home wslg && \
