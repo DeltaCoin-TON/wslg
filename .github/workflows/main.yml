@@ -1,0 +1,142 @@
+name: Build WSLg System Distro
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build WSLg x64 System Distro
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout WSLg
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            docker.io \
+            golang-go \
+            git
+
+      - name: Prepare vendor sources
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p vendor
+
+          git clone \
+            --depth=1 \
+            --branch working \
+            https://github.com/microsoft/FreeRDP-mirror \
+            vendor/FreeRDP
+
+          git clone \
+            --depth=1 \
+            --branch working \
+            https://github.com/microsoft/weston-mirror \
+            vendor/weston
+
+          git clone \
+            --depth=1 \
+            --branch working \
+            https://github.com/microsoft/PulseAudio-mirror \
+            vendor/pulseaudio
+
+          git clone \
+            --depth=1 \
+            --branch v1.721.2-preview \
+            https://github.com/microsoft/DirectX-Headers.git \
+            vendor/DirectX-Headers-1.0
+
+          git clone \
+            --depth=1 \
+            --branch mesa-26.2.2 \
+            https://gitlab.freedesktop.org/mesa/mesa.git \
+            vendor/mesa
+
+      - name: Collect source versions
+        shell: bash
+        run: |
+          set -e
+
+          echo "WSLG_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+          echo "DIRECTX_HEADERS_VERSION=$(git -C vendor/DirectX-Headers-1.0 rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "FREERDP_COMMIT=$(git -C vendor/FreeRDP rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "MESA_VERSION=$(git -C vendor/mesa rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "PULSEAUDIO_COMMIT=$(git -C vendor/pulseaudio rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "WESTON_COMMIT=$(git -C vendor/weston rev-parse HEAD)" >> "$GITHUB_ENV"
+
+          WSLG_VERSION="$(./devops/get-nuget-version.sh -Beta)"
+          echo "WSLG_VERSION=${WSLG_VERSION}" >> "$GITHUB_ENV"
+
+          echo "WSLG_VERSION=${WSLG_VERSION}"
+          echo "WSLG_COMMIT=${WSLG_COMMIT}"
+          echo "DIRECTX_HEADERS_VERSION=${DIRECTX_HEADERS_VERSION}"
+          echo "FREERDP_COMMIT=${FREERDP_COMMIT}"
+          echo "MESA_VERSION=${MESA_VERSION}"
+          echo "PULSEAUDIO_COMMIT=${PULSEAUDIO_COMMIT}"
+          echo "WESTON_COMMIT=${WESTON_COMMIT}"
+
+      - name: Build Docker image
+        shell: bash
+        run: |
+          set -e
+
+          sudo docker build \
+            -f Dockerfile \
+            -t system-distro-x64 \
+            . \
+            --build-arg WSLG_VERSION="${WSLG_VERSION}" \
+            --build-arg WSLG_COMMIT="${WSLG_COMMIT}" \
+            --build-arg WSLG_ARCH=x86_64 \
+            --build-arg DIRECTX_HEADERS_VERSION="${DIRECTX_HEADERS_VERSION}" \
+            --build-arg FREERDP_COMMIT="${FREERDP_COMMIT}" \
+            --build-arg MESA_VERSION="${MESA_VERSION}" \
+            --build-arg PULSEAUDIO_COMMIT="${PULSEAUDIO_COMMIT}" \
+            --build-arg WESTON_COMMIT="${WESTON_COMMIT}"
+
+      - name: Export Docker image
+        shell: bash
+        run: |
+          set -e
+
+          CONTAINER_ID="$(sudo docker create system-distro-x64)"
+
+          sudo docker export \
+            "${CONTAINER_ID}" \
+            > system_x64.tar
+
+          sudo docker rm "${CONTAINER_ID}"
+
+      - name: Convert filesystem to VHD
+        shell: bash
+        run: |
+          set -e
+
+          go run \
+            github.com/Microsoft/hcsshim/cmd/tar2ext4@v0.13.0 \
+            -vhd \
+            -i system_x64.tar \
+            -o system.vhd
+
+      - name: Show output
+        run: |
+          ls -lh system.vhd
+
+      - name: Upload WSLg System VHD
+        uses: actions/upload-artifact@v4
+        with:
+          name: wslg-system-distro-x64
+          path: system.vhd
+          if-no-files-found: error
+          retention-days: 7
