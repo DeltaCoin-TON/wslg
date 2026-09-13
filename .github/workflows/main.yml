@@ -15,8 +15,10 @@ jobs:
       - name: Checkout WSLg
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          ref: v1.0.79
+          fetch-depth: 0
           submodules: false
+
 
       - name: Install dependencies
         run: |
