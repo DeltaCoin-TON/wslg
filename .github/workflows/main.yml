@@ -22,9 +22,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            docker.io \
             golang-go \
             git
+
+          docker --version
+          go version
+          git --version
+
+
 
       - name: Prepare vendor sources
         shell: bash
