@@ -15,7 +15,7 @@ jobs:
       - name: Checkout WSLg
         uses: actions/checkout@v4
         with:
-          ref: v1.0.79
+#          ref: v1.0.79
           fetch-depth: 0
           submodules: false
 
